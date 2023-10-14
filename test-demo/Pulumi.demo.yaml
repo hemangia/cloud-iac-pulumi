@@ -1,0 +1,12 @@
+encryptionsalt: v1:jiOlq7st2Mk=:v1:6dK4bgXkedoHOUuk:uBp/7+MxX4i18U3yr25XrX78iwAwGw==
+config:
+  aws:region: us-west-1
+  networking:cidr: 10.2.0.0/16
+  tag:vpcname: Demo Current VPC
+  tag:pubsubnetname: Demo PublicSubnet
+  tag:prisubnetname: Demo PrivateSubnet
+  tag:pubroutingname: Demo Public Routing
+  tag:priroutingname: Demo Private Routing
+  tag:gatewayname: Demo Internet Gateway
+  publicRoute:cidr: 0.0.0.0/0
+  subnetcidr:range: 24
