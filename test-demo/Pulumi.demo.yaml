@@ -1,6 +1,6 @@
 encryptionsalt: v1:jiOlq7st2Mk=:v1:6dK4bgXkedoHOUuk:uBp/7+MxX4i18U3yr25XrX78iwAwGw==
 config:
-  aws:region: us-west-1
+  aws:region: us-west-2
   networking:cidr: 10.0.0.0/16
   tag:vpcname: My Current VPC
   tag:pubsubnetname: My Public Subnet
@@ -10,10 +10,18 @@ config:
   tag:gatewayname: My Internet Gateway
   publicRoute:cidr: 0.0.0.0/0
   subnetcidr:range: 24
-  amivalid: ami-0a7e68fa74158c073
-  seckeyidVal: csye-ah200-demo
-  tag:instanceArgsName: My Ami 8 instance
-  tag:instanceName: My AMI 8 ec2
+  amivalid: ami-048f1ce43ab30bbdc
+  seckeyidVal: csye-a200-try1
+  tag:instanceArgsName: My Ami 10 instance
+  tag:instanceName: My AMI 10 ec2
   volumeType: gp2
   securityGroupId: my-security-group
   securityGroupName: My security group
+  dbName: csye6225
+  dbuserName: csye6225
+  dbPassword: Test1234
+  engineName: mysql
+  engineVersion: 8.0.28
+  instanceClassName: db.t3.micro
+  rdsFamilyName: mysql8.0
+  instanceType: t2.micro

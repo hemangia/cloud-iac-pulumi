@@ -3,10 +3,10 @@ package myproject;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
@@ -31,17 +31,21 @@ import com.pulumi.aws.ec2.Subnet;
 import com.pulumi.aws.ec2.SubnetArgs;
 import com.pulumi.aws.ec2.Vpc;
 import com.pulumi.aws.ec2.VpcArgs;
-import com.pulumi.aws.ec2.inputs.AmiEbsBlockDeviceArgs;
 import com.pulumi.aws.ec2.inputs.InstanceRootBlockDeviceArgs;
 import com.pulumi.aws.ec2.inputs.SecurityGroupEgressArgs;
 import com.pulumi.aws.ec2.inputs.SecurityGroupIngressArgs;
-import com.pulumi.aws.ec2.outputs.SecurityGroupIngress;
 import com.pulumi.aws.inputs.GetAvailabilityZonesArgs;
 import com.pulumi.aws.outputs.GetAvailabilityZonesResult;
+import com.pulumi.aws.rds.ParameterGroup;
+import com.pulumi.aws.rds.ParameterGroupArgs;
+import com.pulumi.aws.rds.SubnetGroup;
+import com.pulumi.aws.rds.SubnetGroupArgs;
 import com.pulumi.core.Output;
 
 
 public class App {
+
+	private static Output<String> selectedSubnetId;
 
 	public static void main(String[] args) {
 
@@ -71,16 +75,8 @@ public class App {
 			String gatewayNameStr = (String) config.get("tag:gatewayname");
 			String publicRouteCidrStr = (String) config.get("publicRoute:cidr");
 			Integer subnetCidrRange = (Integer) config.get("subnetcidr:range");
-			String ami_idStr = (String) config.get("amivalid");
-			String seckeyidValStr = (String) config.get("seckeyidVal");
-			String instanceArgsNameStr = (String) config.get("tag:instanceArgsName");
-			String instanceNameStr = (String) config.get("tag:instanceName");
-			String volumeTypeStr = (String) config.get("volumeType");
-			String securityGroupIdStr = (String) config.get("securityGroupId");
-			String securityGroupNameStr = (String) config.get("securityGroupName");
+			String rdsFamilyNameStr = (String) config.get("rdsFamilyName");
 			
-			
-
 
 			final CompletableFuture<GetAvailabilityZonesResult> available = AwsFunctions
 					.getAvailabilityZones(GetAvailabilityZonesArgs.builder().state("available").build());
@@ -111,7 +107,7 @@ public class App {
 
 			
 		
-			 Output<String> vpcId = mainVPC.getId();
+			 Output<String> vpcId = mainVPC.id();
 			
 			// Create an Internet Gateway
 			InternetGateway internetGateway = new InternetGateway("internetGateway",
@@ -130,9 +126,8 @@ public class App {
 			String baseCidr = cidrParts[0];
 			int vpcCidrMask = Integer.parseInt(cidrParts[1]);
 			int subnetMask = subnetCidrRange;
-			Output<String> selectedSubnetId = null;  // Change the variable type to String
 			
-			
+			List<Output<String>> privateSubnetIds = new ArrayList<>();
 
 
 
@@ -157,6 +152,7 @@ public class App {
 				Subnet privateSubnet = new Subnet("privateSubnet" + i,
 						SubnetArgs.builder().vpcId(mainVPC.id()).availabilityZone(zoneArray[i])
 								.cidrBlock(newPrivateSubnetCidr).tags(Map.of("Name", priSubnetNameStr + i)).build());
+				privateSubnetIds.add(privateSubnet.id());
 
 				// Create a route to the Internet Gateway
 				Route publicRoute = new Route("publicRoute" + i, RouteArgs.builder().routeTableId(publicRouteTable.id())
@@ -177,85 +173,201 @@ public class App {
 
 			}
 			
-			List<SecurityGroupIngressArgs> ingressRules = new ArrayList<>();
-			ingressRules.add(SecurityGroupIngressArgs.builder()
-				    .fromPort(22) // SSH port
-				    .toPort(22)
-				    .protocol("tcp")
-				    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP ranges
-				    .build());
-
-				ingressRules.add(SecurityGroupIngressArgs.builder()
-				    .fromPort(80) // HTTP port
-				    .toPort(80)
-				    .protocol("tcp")
-				    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP ranges
-				    .build());
-
-				ingressRules.add(SecurityGroupIngressArgs.builder()
-				    .fromPort(3000) // Port 3000
-				    .toPort(3000)
-				    .protocol("tcp")
-				    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP ranges
-				    .build());
-				
-				ingressRules.add(SecurityGroupIngressArgs.builder()
-					    .fromPort(443) // HTTPS port
-					    .toPort(443)
-					    .protocol("tcp")
-					    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP ranges
-					    .build());
-			
-		
-			SecurityGroup mySecurityGroup = new SecurityGroup(securityGroupIdStr, new SecurityGroupArgs.Builder()
-	                .vpcId(vpcId) // Replace with your VPC ID
-	                .description(securityGroupNameStr)
-	                .ingress(ingressRules)
-	                // Add more ingress rules as needed
-	                .egress(SecurityGroupEgressArgs.builder()
-	                    .fromPort(0)
-	                    .toPort(0)
-	                    .protocol("-1") // Allow all outbound traffic
-	                    .cidrBlocks("0.0.0.0/0")
-	                    .build())
-	                .build());
 			
 
-			
-			Output<String> securityGroudId =  mySecurityGroup.id();
-			
-			selectedSubnetId.applyValue(value -> {
-				securityGroudId.applyValue(groupIdValue -> {
-					vpcId.applyValue(vpcIdValue -> {
-					InstanceArgs instanceArgs = InstanceArgs.builder()
-						    .instanceType("t2.micro")  // Set the instance type as per your requirements
-						    .ami(ami_idStr)   // Replace with the actual AMI ID you want to use
-						    .subnetId(value)  // Use the selected subnet ID as a string
-						    .tags(Map.of("Name", instanceArgsNameStr))  // Customize tags as needed
-						    .keyName(seckeyidValStr)  // Specify the SSH key nam
-						    .vpcSecurityGroupIds(groupIdValue)
-						    .rootBlockDevice(InstanceRootBlockDeviceArgs.builder()
-						                .volumeSize(25) // Replace with the desired volume size
-						                .volumeType(volumeTypeStr) // Replace with the desired volume type (e.g., gp2, io1, etc.)
-						                .deleteOnTermination(true) // Set to true to delete the volume on instance termination
-						                .build()
-						        )
-						    .build();
-
-						// Create the EC2 instance
-						Instance ec2Instance = new Instance(instanceNameStr, instanceArgs);
-						return null;
-					});
-					return null;
-				});
-					
-					return null;
-			});
+            //DB Security Group
+            SecurityGroup rdsSecurityGroup = new SecurityGroup("myRDSecurityGroup",
+                    new SecurityGroupArgs.Builder()
+                            .vpcId(vpcId)
+                            .description("My RDS Security Group")
+                            .ingress(SecurityGroupIngressArgs.builder()
+                                    .fromPort(3306)
+                                    .toPort(3306)
+                                    .protocol("tcp")
+                                    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP range
+                                    .build())
+                            .build());
+            // DB parameter group for MySQL
+            ParameterGroup dbParameterGroup = new ParameterGroup("mydbparam",
+                    new ParameterGroupArgs.Builder()
+                            .family(rdsFamilyNameStr)  
+                            .build());
+            
+            
+            
+           final List<String> privateSubnetIdStrings = new ArrayList<>();
+           for(Output<String> item : privateSubnetIds) {
+        	   item.applyValue(value -> {
+        		   privateSubnetIdStrings.add(value);
+        		   if (privateSubnetIdStrings.size() == privateSubnetIds.size()) {         
+        	            createDNS(dbParameterGroup, rdsSecurityGroup, config, privateSubnetIdStrings, vpcId, selectedSubnetId);
+        		   }
+        		   return null;
+        	   });
+        	   
+           }
 				
 		} catch (FileNotFoundException e) {
 			e.printStackTrace();
 		}
 
+	}
+	
+	private static void createDNS(
+			ParameterGroup dbParameterGroup, 
+			SecurityGroup rdsSecurityGroup, 
+			Map<String, Object> config, 
+			List<String> privateSubnetIds,
+			Output<String> vpcId,
+			Output<String> selectedSubnetId
+			) {
+        SubnetGroup rdsSubnetGroup = new SubnetGroup("my-rds-subnet-group", SubnetGroupArgs.builder()
+        	    .subnetIds(privateSubnetIds)  // Use the list of public subnet IDs or privateSubnetIds for your RDS instance
+        	    .description("My RDS Subnet Group Description")
+        	    .name("my-rds-subnet-group-name")
+        	    .build());
+		// Add RDS-related resources
+        String dbNameStr = (String) config.get("dbName");
+        String dbUsername = (String) config.get("dbuserName");
+        String dbPassword = (String) config.get("dbPassword");
+		String securityGroupIdStr = (String) config.get("securityGroupId");
+		String securityGroupNameStr = (String) config.get("securityGroupName");
+		String ami_idStr = (String) config.get("amivalid");
+		String instanceArgsNameStr = (String) config.get("tag:instanceArgsName");
+		String instanceNameStr = (String) config.get("tag:instanceName");
+		String volumeTypeStr = (String) config.get("volumeType");
+		String seckeyidValStr = (String) config.get("seckeyidVal");
+		String engineNameStr = (String) config.get("engineName");
+		String engineVersionStr = (String) config.get("engineVersion");
+		String instanceClassNameStr = (String) config.get("instanceClassName");
+		String instanceTypeStr = (String) config.get("instanceType");
+		
+		 
+        // Create RDS instance
+        com.pulumi.aws.rds.Instance rdsInstance = new com.pulumi.aws.rds.Instance("csye6225", com.pulumi.aws.rds.InstanceArgs.builder()        
+                .allocatedStorage(20)
+                .dbName(dbNameStr)
+                .engine(engineNameStr)
+                .engineVersion(engineVersionStr)
+                .instanceClass(instanceClassNameStr)
+                .parameterGroupName(dbParameterGroup.name())
+                .password(dbPassword)
+                .username(dbUsername)
+                .dbSubnetGroupName(rdsSubnetGroup.name())
+                .vpcSecurityGroupIds(rdsSecurityGroup.id().applyValue(List::of))
+                .publiclyAccessible(false)
+                .skipFinalSnapshot(true)
+                .multiAz(false)
+                .build());
+        
+     
+        
+        Output<String> rdsEndpoint = rdsInstance.endpoint();
+        rdsEndpoint.applyValue(endPointvalue -> {
+        	
+        	String userDataScript = "#!/bin/bash\n" +
+        		    "DB_HOST=" + endPointvalue + "\n" +
+        		    "DB_USERNAME=" + dbUsername + "\n" +
+        		    "DB_PASSWORD=" + dbPassword + "\n" +
+        		    "DB_NAME=" + dbNameStr + "\n" +
+        		    "PORT=3000\n" +
+        		    "sudo apt update -y\n" +
+        		    "{\n" +
+        		    "  echo \"AWS_RDS_DB_ENDPOINT=$DB_HOST\"\n" +
+        		    "  echo \"AWS_RDS_DB_PORT=3306\"\n" +
+        		    "  echo \"AWS_RDS_DB_MASTER_USERNAME=$DB_USERNAME\"\n" +
+        		    "  echo \"AWS_RDS_DB_MASTER_PASSWORD=$DB_PASSWORD\"\n" +
+        		    "  echo \"AWS_RDS_DB_NAME=$DB_NAME\"\n" +
+        		    "  echo \"PORT=$PORT\"\n" +
+        		    "} >> /opt/webapps/application.properties\n"+
+        		    "chmod 755 /opt/webapps/application.properties\n" +
+        		    "sudo chown -R devappuser:appgroup /opt/webapps\n";
+
+        	
+        	List<SecurityGroupIngressArgs> ingressRules = new ArrayList<>();
+    		ingressRules.add(SecurityGroupIngressArgs.builder()
+    			    .fromPort(22) // SSH port
+    			    .toPort(22)
+    			    .protocol("tcp")
+    			    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP ranges
+    			    .build());
+
+    			ingressRules.add(SecurityGroupIngressArgs.builder()
+    			    .fromPort(80) // HTTP port
+    			    .toPort(80)
+    			    .protocol("tcp")
+    			    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP ranges
+    			    .build());
+
+    			ingressRules.add(SecurityGroupIngressArgs.builder()
+    			    .fromPort(3000) // Port 3000
+    			    .toPort(3000)
+    			    .protocol("tcp")
+    			    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP ranges
+    			    .build());
+    			
+    			ingressRules.add(SecurityGroupIngressArgs.builder()
+    				    .fromPort(443) // HTTPS port
+    				    .toPort(443)
+    				    .protocol("tcp")
+    				    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP ranges
+    				    .build());
+    		
+    	
+    		SecurityGroup mySecurityGroup = new SecurityGroup(securityGroupIdStr, new SecurityGroupArgs.Builder()
+                    .vpcId(vpcId) // Replace with your VPC ID
+                    .description(securityGroupNameStr)
+                    .ingress(ingressRules)
+                    // Add more ingress rules as needed
+                    .egress(SecurityGroupEgressArgs.builder()
+                        .fromPort(0)
+                        .toPort(0)
+                        .protocol("-1") // Allow all outbound traffic
+                        .cidrBlocks("0.0.0.0/0")
+                        .build())
+                    .build());
+    		
+
+    		
+    		Output<String> securityGroudId =  mySecurityGroup.id();
+    		
+    		selectedSubnetId.applyValue(value -> {
+    			securityGroudId.applyValue(groupIdValue -> {
+    				vpcId.applyValue(vpcIdValue -> {
+    				InstanceArgs instanceArgs = InstanceArgs.builder()
+    					    .instanceType(instanceTypeStr)  
+    					    .ami(ami_idStr)   
+    					    .subnetId(value)  
+    					    .tags(Map.of("Name", instanceArgsNameStr))  
+    					    .keyName(seckeyidValStr) 
+    					    .vpcSecurityGroupIds(groupIdValue)
+    					    .userData(userDataScript)
+    					    .rootBlockDevice(InstanceRootBlockDeviceArgs.builder()
+    					                .volumeSize(25) 
+    					                .volumeType(volumeTypeStr) // desired volume type (e.g., gp2, io1, etc.)
+    					                .deleteOnTermination(true) // Set to true to delete the volume on instance termination
+    					                .build()
+    					        )
+    				
+    					    
+    					    .build();
+
+    					// Create the EC2 instance
+    					Instance ec2Instance = new Instance(instanceNameStr, instanceArgs);
+    					
+    					
+    					
+    					return null;
+    				});
+    				return null;
+    			});
+    				
+    				return null;
+    		});
+    
+        	return null;
+
+        });
 	}
 
 	private static String incrementCIDR(String baseCidr, int subnetMask, int i) {
