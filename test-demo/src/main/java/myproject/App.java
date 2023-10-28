@@ -172,6 +172,51 @@ public class App {
 
 
 			}
+			String securityGroupIdStr = (String) config.get("securityGroupId");
+			String securityGroupNameStr = (String) config.get("securityGroupName");
+			
+			List<SecurityGroupIngressArgs> ingressRules = new ArrayList<>();
+    		ingressRules.add(SecurityGroupIngressArgs.builder()
+    			    .fromPort(22) // SSH port
+    			    .toPort(22)
+    			    .protocol("tcp")
+    			    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP ranges
+    			    .build());
+
+    			ingressRules.add(SecurityGroupIngressArgs.builder()
+    			    .fromPort(80) // HTTP port
+    			    .toPort(80)
+    			    .protocol("tcp")
+    			    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP ranges
+    			    .build());
+
+    			ingressRules.add(SecurityGroupIngressArgs.builder()
+    			    .fromPort(3000) // Port 3000
+    			    .toPort(3000)
+    			    .protocol("tcp")
+    			    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP ranges
+    			    .build());
+    			
+    			ingressRules.add(SecurityGroupIngressArgs.builder()
+    				    .fromPort(443) // HTTPS port
+    				    .toPort(443)
+    				    .protocol("tcp")
+    				    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP ranges
+    				    .build());
+    		
+    	
+    		SecurityGroup mySecurityGroup = new SecurityGroup(securityGroupIdStr, new SecurityGroupArgs.Builder()
+                    .vpcId(vpcId)
+                    .description(securityGroupNameStr)
+                    .ingress(ingressRules)
+                    // Add more ingress rules as needed
+                    .egress(SecurityGroupEgressArgs.builder()
+                        .fromPort(0)
+                        .toPort(0)
+                        .protocol("-1") // Allow all outbound traffic
+                        .cidrBlocks("0.0.0.0/0")
+                        .build())
+                    .build());
 			
 			
 
@@ -184,9 +229,11 @@ public class App {
                                     .fromPort(3306)
                                     .toPort(3306)
                                     .protocol("tcp")
-                                    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP range
+                                    .securityGroups(mySecurityGroup.id().applyValue(List::of))
                                     .build())
                             .build());
+            
+            
             // DB parameter group for MySQL
             ParameterGroup dbParameterGroup = new ParameterGroup("mydbparam",
                     new ParameterGroupArgs.Builder()
@@ -200,7 +247,7 @@ public class App {
         	   item.applyValue(value -> {
         		   privateSubnetIdStrings.add(value);
         		   if (privateSubnetIdStrings.size() == privateSubnetIds.size()) {         
-        	            createDNS(dbParameterGroup, rdsSecurityGroup, config, privateSubnetIdStrings, vpcId, selectedSubnetId);
+        	            createDNS(dbParameterGroup, rdsSecurityGroup, config, privateSubnetIdStrings, vpcId, selectedSubnetId, mySecurityGroup);
         		   }
         		   return null;
         	   });
@@ -219,7 +266,7 @@ public class App {
 			Map<String, Object> config, 
 			List<String> privateSubnetIds,
 			Output<String> vpcId,
-			Output<String> selectedSubnetId
+			Output<String> selectedSubnetId,SecurityGroup mySecurityGroup
 			) {
         SubnetGroup rdsSubnetGroup = new SubnetGroup("my-rds-subnet-group", SubnetGroupArgs.builder()
         	    .subnetIds(privateSubnetIds)  // Use the list of public subnet IDs or privateSubnetIds for your RDS instance
@@ -230,8 +277,7 @@ public class App {
         String dbNameStr = (String) config.get("dbName");
         String dbUsername = (String) config.get("dbuserName");
         String dbPassword = (String) config.get("dbPassword");
-		String securityGroupIdStr = (String) config.get("securityGroupId");
-		String securityGroupNameStr = (String) config.get("securityGroupName");
+
 		String ami_idStr = (String) config.get("amivalid");
 		String instanceArgsNameStr = (String) config.get("tag:instanceArgsName");
 		String instanceNameStr = (String) config.get("tag:instanceName");
@@ -284,48 +330,7 @@ public class App {
         		    "sudo chown -R devappuser:appgroup /opt/webapps\n";
 
         	
-        	List<SecurityGroupIngressArgs> ingressRules = new ArrayList<>();
-    		ingressRules.add(SecurityGroupIngressArgs.builder()
-    			    .fromPort(22) // SSH port
-    			    .toPort(22)
-    			    .protocol("tcp")
-    			    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP ranges
-    			    .build());
-
-    			ingressRules.add(SecurityGroupIngressArgs.builder()
-    			    .fromPort(80) // HTTP port
-    			    .toPort(80)
-    			    .protocol("tcp")
-    			    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP ranges
-    			    .build());
-
-    			ingressRules.add(SecurityGroupIngressArgs.builder()
-    			    .fromPort(3000) // Port 3000
-    			    .toPort(3000)
-    			    .protocol("tcp")
-    			    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP ranges
-    			    .build());
-    			
-    			ingressRules.add(SecurityGroupIngressArgs.builder()
-    				    .fromPort(443) // HTTPS port
-    				    .toPort(443)
-    				    .protocol("tcp")
-    				    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP ranges
-    				    .build());
-    		
-    	
-    		SecurityGroup mySecurityGroup = new SecurityGroup(securityGroupIdStr, new SecurityGroupArgs.Builder()
-                    .vpcId(vpcId) // Replace with your VPC ID
-                    .description(securityGroupNameStr)
-                    .ingress(ingressRules)
-                    // Add more ingress rules as needed
-                    .egress(SecurityGroupEgressArgs.builder()
-                        .fromPort(0)
-                        .toPort(0)
-                        .protocol("-1") // Allow all outbound traffic
-                        .cidrBlocks("0.0.0.0/0")
-                        .build())
-                    .build());
+        	
     		
 
     		
