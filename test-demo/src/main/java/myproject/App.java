@@ -3,6 +3,7 @@ package myproject;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.HashSet;
 import java.util.List;
@@ -34,12 +35,20 @@ import com.pulumi.aws.ec2.VpcArgs;
 import com.pulumi.aws.ec2.inputs.InstanceRootBlockDeviceArgs;
 import com.pulumi.aws.ec2.inputs.SecurityGroupEgressArgs;
 import com.pulumi.aws.ec2.inputs.SecurityGroupIngressArgs;
+import com.pulumi.aws.iam.InstanceProfile;
+import com.pulumi.aws.iam.InstanceProfileArgs;
+import com.pulumi.aws.iam.Role;
+import com.pulumi.aws.iam.RoleArgs;
+import com.pulumi.aws.iam.RolePolicyAttachment;
+import com.pulumi.aws.iam.RolePolicyAttachmentArgs;
 import com.pulumi.aws.inputs.GetAvailabilityZonesArgs;
 import com.pulumi.aws.outputs.GetAvailabilityZonesResult;
 import com.pulumi.aws.rds.ParameterGroup;
 import com.pulumi.aws.rds.ParameterGroupArgs;
 import com.pulumi.aws.rds.SubnetGroup;
 import com.pulumi.aws.rds.SubnetGroupArgs;
+import com.pulumi.aws.route53.Record;
+import com.pulumi.aws.route53.RecordArgs;
 import com.pulumi.core.Output;
 
 
@@ -57,7 +66,7 @@ public class App {
 		var config2 = ctx.config();
 
 		Yaml yaml = new Yaml();
-		String yamlFile = "Pulumi.dev.yaml";
+		String yamlFile = "Pulumi.demo.yaml";
 		try {
 			Map<String, Object> yamlData = yaml.load(new FileInputStream(yamlFile));
 
@@ -287,6 +296,9 @@ public class App {
 		String engineVersionStr = (String) config.get("engineVersion");
 		String instanceClassNameStr = (String) config.get("instanceClassName");
 		String instanceTypeStr = (String) config.get("instanceType");
+		String hostedNameStr = (String) config.get("hostedName");
+		String zoneIDStr = (String) config.get("zoneID");
+
 		
 		 
         // Create RDS instance
@@ -327,7 +339,29 @@ public class App {
         		    "  echo \"PORT=$PORT\"\n" +
         		    "} >> /opt/webapps/application.properties\n"+
         		    "chmod 755 /opt/webapps/application.properties\n" +
-        		    "sudo chown -R devappuser:appgroup /opt/webapps\n";
+        		    "sudo chown -R devappuser:appgroup /opt/webapps\n"+
+        		    "sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/webapps/cloudwatch-config.json  -s\n";
+        	
+        	
+        	// Create an IAM role
+        	Role cloudWatchAgentRole = new Role("CloudWatchAgentRole", RoleArgs.builder()
+        		    .assumeRolePolicy("{\"Version\":\"2012-10-17\",\"Statement\":[{\"Action\":\"sts:AssumeRole\",\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"ec2.amazonaws.com\"}}]}")
+        		    .description("IAM role for CloudWatch Agent")
+        		    .name("CloudWatchAgentRole")
+        		    .tags(Map.of("Name", "CloudWatchAgentRole"))
+        		    .build());
+
+            // Attach the CloudWatchAgentServerPolicy to the IAM role
+        	new RolePolicyAttachment("CloudWatchAgentServerPolicyAttachment", RolePolicyAttachmentArgs.builder()
+        		    .policyArn("arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy")
+        		    .role(cloudWatchAgentRole.name())
+        		    .build());
+        	
+        	// Create an IAM instance profile
+        	InstanceProfile cloudWatchAgentProfile = new InstanceProfile("CloudWatchAgentProfile", InstanceProfileArgs.builder()
+        	    .name("CloudWatchAgentProfile")
+        	    .role(cloudWatchAgentRole.name())
+        	    .build());
 
         	
         	
@@ -345,6 +379,7 @@ public class App {
     					    .subnetId(value)  
     					    .tags(Map.of("Name", instanceArgsNameStr))  
     					    .keyName(seckeyidValStr) 
+    					    .iamInstanceProfile(cloudWatchAgentProfile.name())
     					    .vpcSecurityGroupIds(groupIdValue)
     					    .userData(userDataScript)
     					    .rootBlockDevice(InstanceRootBlockDeviceArgs.builder()
@@ -360,7 +395,10 @@ public class App {
     					// Create the EC2 instance
     					Instance ec2Instance = new Instance(instanceNameStr, instanceArgs);
     					
-    					
+    					Output<String> ec2IpAddress = ec2Instance.publicIp();
+    							 //"dev.csye6225hemangi.com";
+    					createRoute53DevRecord(ec2IpAddress,hostedNameStr, zoneIDStr);
+    					//createRoute53DemoRecord(ec2IpAddress,demoHostedNameStr, demoZoneIDStr);
     					
     					return null;
     				});
@@ -380,6 +418,25 @@ public class App {
 		int thirdOctet = Integer.parseInt(parts[2]);
 		int newThirdOctet = thirdOctet + i;
 		return parts[0] + "." + parts[1] + "." + newThirdOctet + ".0/" + subnetMask;
+	}
+	private static void createRoute53DevRecord(Output<String> ec2IpAddress, String devHostname, String zoneId) {
+		 Record route53ARecordDev = new Record("my-route53-a-dev-record", new RecordArgs.Builder()
+			        .name(devHostname) 
+			        .type("A")
+			        .zoneId(zoneId) 
+			        .records(ec2IpAddress.applyValue(List::of))
+			        .ttl(300) 
+			        .build());
+	}
+	
+	private static void createRoute53DemoRecord(Output<String> ec2IpAddress, String demoHostname, String zoneId) {
+		 Record route53ARecordDemo = new Record("my-route53-a-demo-record", new RecordArgs.Builder()
+			        .name(demoHostname) 
+			        .type("A")
+			        .zoneId(zoneId) 
+			        .records(ec2IpAddress.applyValue(List::of))
+			        .ttl(300) 
+			        .build());
 	}
 
 }

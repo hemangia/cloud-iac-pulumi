@@ -10,7 +10,7 @@ config:
   tag:gatewayname: My Internet Gateway
   publicRoute:cidr: 0.0.0.0/0
   subnetcidr:range: 24
-  amivalid: ami-048f1ce43ab30bbdc
+  amivalid: ami-03698008c92645e4e
   seckeyidVal: csye-a200-try1
   tag:instanceArgsName: My Ami 10 instance
   tag:instanceName: My AMI 10 ec2
@@ -25,3 +25,5 @@ config:
   instanceClassName: db.t3.micro
   rdsFamilyName: mysql8.0
   instanceType: t2.micro
+  hostedName: dev.csye6225hemangi.com
+  zoneID: Z04703011ZGT6FH4XUA48
