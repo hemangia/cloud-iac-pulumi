@@ -16,10 +16,28 @@ import org.yaml.snakeyaml.Yaml;
 import com.pulumi.Context;
 import com.pulumi.Pulumi;
 import com.pulumi.aws.AwsFunctions;
+import com.pulumi.aws.autoscaling.Attachment;
+import com.pulumi.aws.autoscaling.AttachmentArgs;
+import com.pulumi.aws.autoscaling.Group;
+import com.pulumi.aws.autoscaling.GroupArgs;
+import com.pulumi.aws.autoscaling.Policy;
+import com.pulumi.aws.autoscaling.PolicyArgs;
+import com.pulumi.aws.autoscaling.inputs.GroupLaunchTemplateArgs;
+import com.pulumi.aws.autoscaling.inputs.GroupTagArgs;
+import com.pulumi.aws.autoscaling.inputs.PolicyTargetTrackingConfigurationArgs;
+import com.pulumi.aws.autoscaling.inputs.PolicyTargetTrackingConfigurationPredefinedMetricSpecificationArgs;
+import com.pulumi.aws.cloudwatch.MetricAlarm;
+import com.pulumi.aws.cloudwatch.MetricAlarmArgs;
+import com.pulumi.aws.cloudwatch.inputs.MetricAlarmMetricQueryArgs;
+import com.pulumi.aws.cloudwatch.inputs.MetricAlarmMetricQueryMetricArgs;
 import com.pulumi.aws.ec2.Instance;
 import com.pulumi.aws.ec2.InstanceArgs;
 import com.pulumi.aws.ec2.InternetGateway;
 import com.pulumi.aws.ec2.InternetGatewayArgs;
+import com.pulumi.aws.ec2.LaunchConfiguration;
+import com.pulumi.aws.ec2.LaunchConfigurationArgs;
+import com.pulumi.aws.ec2.LaunchTemplate;
+import com.pulumi.aws.ec2.LaunchTemplateArgs;
 import com.pulumi.aws.ec2.Route;
 import com.pulumi.aws.ec2.RouteArgs;
 import com.pulumi.aws.ec2.RouteTable;
@@ -33,8 +51,14 @@ import com.pulumi.aws.ec2.SubnetArgs;
 import com.pulumi.aws.ec2.Vpc;
 import com.pulumi.aws.ec2.VpcArgs;
 import com.pulumi.aws.ec2.inputs.InstanceRootBlockDeviceArgs;
+import com.pulumi.aws.ec2.inputs.LaunchTemplateBlockDeviceMappingArgs;
+import com.pulumi.aws.ec2.inputs.LaunchTemplateBlockDeviceMappingEbsArgs;
+import com.pulumi.aws.ec2.inputs.LaunchTemplateIamInstanceProfileArgs;
+import com.pulumi.aws.ec2.inputs.LaunchTemplateNetworkInterfaceArgs;
+import com.pulumi.aws.ec2.inputs.LaunchTemplateTagSpecificationArgs;
 import com.pulumi.aws.ec2.inputs.SecurityGroupEgressArgs;
 import com.pulumi.aws.ec2.inputs.SecurityGroupIngressArgs;
+import com.pulumi.aws.ec2.outputs.LaunchTemplateIamInstanceProfile;
 import com.pulumi.aws.iam.InstanceProfile;
 import com.pulumi.aws.iam.InstanceProfileArgs;
 import com.pulumi.aws.iam.Role;
@@ -42,6 +66,16 @@ import com.pulumi.aws.iam.RoleArgs;
 import com.pulumi.aws.iam.RolePolicyAttachment;
 import com.pulumi.aws.iam.RolePolicyAttachmentArgs;
 import com.pulumi.aws.inputs.GetAvailabilityZonesArgs;
+import com.pulumi.aws.lb.Listener;
+import com.pulumi.aws.lb.ListenerArgs;
+import com.pulumi.aws.lb.LoadBalancer;
+import com.pulumi.aws.lb.LoadBalancerArgs;
+import com.pulumi.aws.lb.TargetGroup;
+import com.pulumi.aws.lb.TargetGroupArgs;
+import com.pulumi.aws.lb.TargetGroupAttachment;
+import com.pulumi.aws.lb.TargetGroupAttachmentArgs;
+import com.pulumi.aws.lb.inputs.ListenerDefaultActionArgs;
+import com.pulumi.aws.lb.inputs.TargetGroupHealthCheckArgs;
 import com.pulumi.aws.outputs.GetAvailabilityZonesResult;
 import com.pulumi.aws.rds.ParameterGroup;
 import com.pulumi.aws.rds.ParameterGroupArgs;
@@ -49,7 +83,11 @@ import com.pulumi.aws.rds.SubnetGroup;
 import com.pulumi.aws.rds.SubnetGroupArgs;
 import com.pulumi.aws.route53.Record;
 import com.pulumi.aws.route53.RecordArgs;
+import com.pulumi.aws.route53.inputs.RecordAliasArgs;
+import com.pulumi.awsx.lb.ApplicationLoadBalancer;
+import com.pulumi.awsx.lb.ApplicationLoadBalancerArgs;
 import com.pulumi.core.Output;
+
 
 
 public class App {
@@ -137,6 +175,7 @@ public class App {
 			int subnetMask = subnetCidrRange;
 			
 			List<Output<String>> privateSubnetIds = new ArrayList<>();
+			List<Output<String>> publicSubnetIds = new ArrayList<>();
 
 
 
@@ -152,6 +191,7 @@ public class App {
 						SubnetArgs.builder().vpcId(mainVPC.id()).availabilityZone(zoneArray[i])
 								.cidrBlock(newPublicSubnetCidr).mapPublicIpOnLaunch(true)
 								.tags(Map.of("Name", pubSubnetNameStr + i)).build());
+				publicSubnetIds.add(publicSubnet.id());
 				
 				selectedSubnetId = publicSubnet.id();
 				
@@ -181,38 +221,32 @@ public class App {
 
 
 			}
+			
+			
+			SecurityGroup lbSecurityGroup  = buildLoadBalancerSecGroup(mainVPC.id());
+			
 			String securityGroupIdStr = (String) config.get("securityGroupId");
 			String securityGroupNameStr = (String) config.get("securityGroupName");
 			
+			//Application Security
 			List<SecurityGroupIngressArgs> ingressRules = new ArrayList<>();
     		ingressRules.add(SecurityGroupIngressArgs.builder()
     			    .fromPort(22) // SSH port
     			    .toPort(22)
     			    .protocol("tcp")
-    			    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP ranges
+    			   .cidrBlocks("0.0.0.0/0")
+    			   // .securityGroups(lbSecurityGroup.id().applyValue(List::of))
     			    .build());
 
-    			ingressRules.add(SecurityGroupIngressArgs.builder()
-    			    .fromPort(80) // HTTP port
-    			    .toPort(80)
-    			    .protocol("tcp")
-    			    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP ranges
-    			    .build());
 
     			ingressRules.add(SecurityGroupIngressArgs.builder()
     			    .fromPort(3000) // Port 3000
     			    .toPort(3000)
     			    .protocol("tcp")
-    			    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP ranges
+    			    
+    			    .securityGroups(lbSecurityGroup.id().applyValue(List::of))
     			    .build());
     			
-    			ingressRules.add(SecurityGroupIngressArgs.builder()
-    				    .fromPort(443) // HTTPS port
-    				    .toPort(443)
-    				    .protocol("tcp")
-    				    .cidrBlocks("0.0.0.0/0") // Replace with your allowed IP ranges
-    				    .build());
-    		
     	
     		SecurityGroup mySecurityGroup = new SecurityGroup(securityGroupIdStr, new SecurityGroupArgs.Builder()
                     .vpcId(vpcId)
@@ -255,8 +289,17 @@ public class App {
            for(Output<String> item : privateSubnetIds) {
         	   item.applyValue(value -> {
         		   privateSubnetIdStrings.add(value);
-        		   if (privateSubnetIdStrings.size() == privateSubnetIds.size()) {         
-        	            createDNS(dbParameterGroup, rdsSecurityGroup, config, privateSubnetIdStrings, vpcId, selectedSubnetId, mySecurityGroup);
+        		   if (privateSubnetIdStrings.size() == privateSubnetIds.size()) { 
+        			   final List<String> publicSubnetIdStrings = new ArrayList<>();
+        			   for(Output<String> publicItem : publicSubnetIds) {
+        				   publicItem.applyValue(publicValue -> {
+        					   publicSubnetIdStrings.add(publicValue);
+        					   if (publicSubnetIdStrings.size() == publicSubnetIds.size()) {
+        						   createDNS(dbParameterGroup, rdsSecurityGroup, config, privateSubnetIdStrings, vpcId, selectedSubnetId, mySecurityGroup, lbSecurityGroup, publicSubnetIdStrings, zoneArray);
+        					   }
+        					   return null;
+        				   });
+        			   }
         		   }
         		   return null;
         	   });
@@ -275,7 +318,10 @@ public class App {
 			Map<String, Object> config, 
 			List<String> privateSubnetIds,
 			Output<String> vpcId,
-			Output<String> selectedSubnetId,SecurityGroup mySecurityGroup
+			Output<String> selectedSubnetId,SecurityGroup mySecurityGroup,
+			SecurityGroup lbSecurityGroup ,
+			List<String> publicSubnetIds,
+			String[] zoneArray
 			) {
         SubnetGroup rdsSubnetGroup = new SubnetGroup("my-rds-subnet-group", SubnetGroupArgs.builder()
         	    .subnetIds(privateSubnetIds)  // Use the list of public subnet IDs or privateSubnetIds for your RDS instance
@@ -363,9 +409,7 @@ public class App {
         	    .role(cloudWatchAgentRole.name())
         	    .build());
 
-        	
-        	
-    		
+     
 
     		
     		Output<String> securityGroudId =  mySecurityGroup.id();
@@ -373,6 +417,7 @@ public class App {
     		selectedSubnetId.applyValue(value -> {
     			securityGroudId.applyValue(groupIdValue -> {
     				vpcId.applyValue(vpcIdValue -> {
+    					/*
     				InstanceArgs instanceArgs = InstanceArgs.builder()
     					    .instanceType(instanceTypeStr)  
     					    .ami(ami_idStr)   
@@ -394,11 +439,135 @@ public class App {
 
     					// Create the EC2 instance
     					Instance ec2Instance = new Instance(instanceNameStr, instanceArgs);
+    					*/
     					
-    					Output<String> ec2IpAddress = ec2Instance.publicIp();
-    							 //"dev.csye6225hemangi.com";
-    					createRoute53DevRecord(ec2IpAddress,hostedNameStr, zoneIDStr);
-    					//createRoute53DemoRecord(ec2IpAddress,demoHostedNameStr, demoZoneIDStr);
+    					LaunchTemplate instanceTemplate = createInstanceTemplate(instanceTypeStr,ami_idStr, value, instanceArgsNameStr,seckeyidValStr
+    							, cloudWatchAgentProfile,groupIdValue,userDataScript );
+    					  // Set up a target group for port 80
+    		            TargetGroup targetGroup = new TargetGroup("targetGroup", TargetGroupArgs.builder()
+    		                .port(3000)
+    		                .protocol("HTTP")
+    		                .vpcId(vpcId)
+    		                .healthCheck(TargetGroupHealthCheckArgs.builder()
+    		                		.path("/api/database/healthz")
+    		                		//.path("/v1/assignments")
+    		                	//	.port("traffic-port")
+    		                		.enabled(true)
+    		                		.interval(120)
+    		                		//.timeout(5)
+    		                		.protocol("HTTP")
+    		                		//.matcher("200")
+    		                		.build())
+    		                //Specify healthcheck here path, port - application
+    		              
+    		              // .targetType("instance") 
+    		                .build());
+    		            
+    		            
+    					
+    					Group autoScalingGroup = createAutoScalingGroup(instanceTemplate, zoneArray, publicSubnetIds,targetGroup);
+    					
+    					/*
+    					Attachment asgAttachment = new Attachment("asgAttachment", new AttachmentArgs
+    				            .Builder()
+    				                .autoscalingGroupName(autoScalingGroup.name())
+    				                .lbTargetGroupArn(targetGroup.arn())
+    				                
+    				            .build()); */
+
+    				    
+    					
+    					// Scale up policy
+    					Policy scaleUpPolicy = new Policy("scaleUp", PolicyArgs.builder()
+    		                    .autoscalingGroupName(autoScalingGroup.name())
+    		                    .adjustmentType("ChangeInCapacity")
+    		                  //  .policyType("SimpleScaling")
+    		                    .scalingAdjustment(1)
+    		                   .cooldown(300)
+    		                    // should mention Target check which tells when to scale up and down 
+    		                    .build());
+    		            
+    		            // Scale down policy
+    		            Policy scaleDownPolicy = new Policy("scaleDown", PolicyArgs.builder()
+    		                    .autoscalingGroupName(autoScalingGroup.name())
+    		                    .adjustmentType("ChangeInCapacity")
+    		                   // .policyType("SimpleScaling")
+    		                    .scalingAdjustment(-1)
+    		                    .cooldown(300)
+    		                    .build());
+    		            
+	    		   autoScalingGroup.name().applyValue(autoScalingGroupNameString -> {
+	    		        	// CloudWatch Metric Alarms
+	    		       
+	     		            MetricAlarm highCpuAlarm = new MetricAlarm("highCpuUsage", MetricAlarmArgs.builder()
+	     		                    .comparisonOperator("GreaterThanThreshold")
+	     		                    .evaluationPeriods(2)
+	     		                    .metricName("CPUUtilization")
+	     		                    .namespace("AWS/EC2")
+	     		                    .period(60)
+	     		                    .statistic("Average")
+	     		                    .threshold(5.0)
+	     		                 //  .unit("Percent")
+	     		                    .dimensions(Map.of("AutoScalingGroupName", autoScalingGroupNameString))  //Dimension autoscaling group name
+	     		                   .alarmDescription("This metric for high cpu usage")
+	     		                    .alarmActions(scaleUpPolicy.arn().applyValue(List::of))
+	     		                    .build());
+
+	     		            MetricAlarm lowCpuAlarm = new MetricAlarm("lowCpuUsage", MetricAlarmArgs.builder()
+	     		                    .comparisonOperator("LessThanThreshold")
+	     		                    .evaluationPeriods(2)
+	     		                    .metricName("CPUUtilization")
+	     		                    .namespace("AWS/EC2")
+	     		                    .period(60)
+	     		                    .statistic("Average")
+	     		                    .threshold(3.0)
+	     		                   // .unit("Percent")
+	     		                    .dimensions(Map.of("AutoScalingGroupName", autoScalingGroupNameString))   //Dimension autoscaling group name
+	     		                    .alarmDescription("This metric for low cpu usage")
+	     		                    .alarmActions(scaleDownPolicy.arn().applyValue(List::of))
+	     		                    .build());
+	     					
+	     					
+	     		            // Create a new Application Load Balancer
+	     		            LoadBalancer loadBalancer = new LoadBalancer("MyappLoadBalancer", LoadBalancerArgs.builder()
+	     		            	.subnets(publicSubnetIds)
+	     		            	//.ipAddressType("ipv4")
+	     		               // .subnetIds(publicSubnetIds)
+	     		                .securityGroups(lbSecurityGroup.id().applyValue(List::of))
+	     		                .loadBalancerType("application")
+	     		                //.enableDeletionProtection(false)
+	     		               .internal(false) 
+	     		                .build());
+	     		            
+	     		          
+	     		            
+	     		            Listener listener = new Listener("listener", ListenerArgs.builder()
+	     		                    .loadBalancerArn(loadBalancer.arn())
+	     		                    .port(80)
+	     		                    .protocol("HTTP")
+	     		                    .defaultActions(ListenerDefaultActionArgs.builder()
+	     		                            .type("forward")
+	     		                            .targetGroupArn(targetGroup.arn())
+	     		                            .build())
+	     		                    .build());
+	     		            
+	     					
+	     					//Output<String> ec2IpAddress = ec2Instance.publicIp();
+	     					
+	     					//"dev.csye6225hemangi.com";
+	     		            Output<String> loadBalancerDnsName = loadBalancer.dnsName();
+	     		            String zoneId = zoneIDStr ;
+	     		            String domainName = "demo.csye6225hemangi.com"; 
+	     		            String subdomainDev = "dev"; 
+	     		            String subdomainDemo = "demo"; 
+
+	     		            createRoute53AliasRecord(loadBalancer, domainName, zoneId);
+
+	     					//createRoute53DemoRecord(ec2IpAddress,demoHostedNameStr, demoZoneIDStr);
+	    		        	 return null; 
+	    		         });   
+    		            
+    		        
     					
     					return null;
     				});
@@ -412,6 +581,36 @@ public class App {
 
         });
 	}
+	
+	private static SecurityGroup buildLoadBalancerSecGroup(Output<String> id) {
+		 SecurityGroup lbSecurityGroup = new SecurityGroup("MylbSecurityGroup",
+                 SecurityGroupArgs.builder()
+                         .vpcId(id)
+                         .description("Load Balancer Security Group")
+                         .ingress(Arrays.asList(
+                                 SecurityGroupIngressArgs.builder()
+                                         .fromPort(80)
+                                         .toPort(80)
+                                         .protocol("tcp")
+                                         .cidrBlocks("0.0.0.0/0")
+                                         .build(),
+                                 SecurityGroupIngressArgs.builder()
+                                         .fromPort(443)
+                                         .toPort(443)
+                                         .protocol("tcp")
+                                         .cidrBlocks("0.0.0.0/0")
+                                         .build()
+                         ))
+                         .egress(SecurityGroupEgressArgs.builder()
+                                 .fromPort(0)
+                                 .toPort(0)
+                                 .protocol("-1") // Allow all outbound traffic
+                                 .cidrBlocks("0.0.0.0/0")
+                                 .build())
+                         .build());
+
+		return lbSecurityGroup;
+	}
 
 	private static String incrementCIDR(String baseCidr, int subnetMask, int i) {
 		String[] parts = baseCidr.split("\\.");
@@ -419,15 +618,28 @@ public class App {
 		int newThirdOctet = thirdOctet + i;
 		return parts[0] + "." + parts[1] + "." + newThirdOctet + ".0/" + subnetMask;
 	}
-	private static void createRoute53DevRecord(Output<String> ec2IpAddress, String devHostname, String zoneId) {
+	private static void createRoute53DevRecord(Output<String> dnsName, String devHostname, String zoneId) {
 		 Record route53ARecordDev = new Record("my-route53-a-dev-record", new RecordArgs.Builder()
 			        .name(devHostname) 
 			        .type("A")
 			        .zoneId(zoneId) 
-			        .records(ec2IpAddress.applyValue(List::of))
+			        //.records(ec2IpAddress.applyValue(List::of))
 			        .ttl(300) 
 			        .build());
 	}
+    private static void createRoute53AliasRecord(LoadBalancer loadBalancer, String recordName, String zoneId) {
+        new Record("my-route53-a-demo-record", new RecordArgs.Builder()
+                .name(recordName)
+                .type("A")
+                .zoneId(zoneId)
+                .aliases(RecordAliasArgs.builder()
+                        .name(loadBalancer.dnsName())
+                        .zoneId(loadBalancer.zoneId())
+                        .evaluateTargetHealth(true)
+                        .build())
+                .build());
+    }
+
 	
 	private static void createRoute53DemoRecord(Output<String> ec2IpAddress, String demoHostname, String zoneId) {
 		 Record route53ARecordDemo = new Record("my-route53-a-demo-record", new RecordArgs.Builder()
@@ -438,5 +650,80 @@ public class App {
 			        .ttl(300) 
 			        .build());
 	}
+	private static LaunchTemplate createInstanceTemplate(String instanceTypeStr, String ami_idStr, String value, String instanceArgsNameStr,
+			String seckeyidValStr, InstanceProfile cloudWatchAgentProfile, String groupIdValue, String userDataScript) {
+		  var encodedUserData = Base64.getEncoder().encodeToString(userDataScript.getBytes());
+          
+		LaunchTemplate instanceTemplate = new LaunchTemplate("instanceTemplate",
+				LaunchTemplateArgs.builder()
+	                        .imageId(ami_idStr)  
+	                        .instanceType(instanceTypeStr)
+	                        .keyName(seckeyidValStr)
+	                        .userData(encodedUserData)
+	                        
+	                        .iamInstanceProfile(LaunchTemplateIamInstanceProfileArgs.builder()
+	                                .name(cloudWatchAgentProfile.name())
+	                                .build())
+	                      
+	                     /*  .blockDeviceMappings(LaunchTemplateBlockDeviceMappingArgs.builder()
+	                               .deviceName("/dev/xvda")
+	                               .ebs(LaunchTemplateBlockDeviceMappingEbsArgs.builder()
+	                                   .volumeSize(25)
+	                                   .volumeType("gp2")
+	                                   .deleteOnTermination("true")
+	                                   .build())
+	                               .build()) */
+	                       .networkInterfaces(LaunchTemplateNetworkInterfaceArgs.builder()
+	                    		   .securityGroups(Arrays.asList(groupIdValue)) 
+	                               .associatePublicIpAddress("true")
+	                               .build())
+	                    
+	                        .build());
+		return instanceTemplate;
+		
+	}
+	private static Group createAutoScalingGroup(LaunchTemplate instanceTemplate, String[] zoneArray, List<String> publicSubnetIds, TargetGroup targetGroup) {
+		 List<String> zoneList = new ArrayList<>(Arrays.asList(zoneArray));
+
+		 Group autoScalingGroup = new Group("MyautoScalingGroup", new GroupArgs
+	                .Builder()
+	                .defaultCooldown(120)
+	               
+	                .launchTemplate(GroupLaunchTemplateArgs.builder()
+	                        .id(instanceTemplate.id())
+	                        .version("$Latest")
+	                        .build())
+	                .minSize(1)
+	                .targetGroupArns(targetGroup.arn().applyValue(List::of))
+	                .vpcZoneIdentifiers(publicSubnetIds)
+	               // .availabilityZones(zoneList)
+	                .maxSize(3)
+	                .desiredCapacity(1)
+	                .healthCheckGracePeriod(400)
+	              //  .healthCheckType("EC2")
+	            
+	                .tags(            
+	                        GroupTagArgs.builder()
+	                            .key("Name")
+	                            .value("My-instance")
+	                            .propagateAtLaunch(true)
+	                            .build()
+	                            /*,
+	                            GroupTagArgs.builder()
+	                            .key("AutoScalingGroup")
+	                            .value("TagProperty")
+	                            .propagateAtLaunch(true)
+	                            .build() */
+	                        
+	                		)
+	              
+	                .build());
+		 
+		 return autoScalingGroup;
+		
+	}
+	
+	
 
 }
+
