@@ -15,6 +15,7 @@ import org.yaml.snakeyaml.Yaml;
 
 import com.pulumi.Context;
 import com.pulumi.Pulumi;
+import com.pulumi.asset.FileArchive;
 import com.pulumi.aws.AwsFunctions;
 import com.pulumi.aws.autoscaling.Attachment;
 import com.pulumi.aws.autoscaling.AttachmentArgs;
@@ -30,6 +31,10 @@ import com.pulumi.aws.cloudwatch.MetricAlarm;
 import com.pulumi.aws.cloudwatch.MetricAlarmArgs;
 import com.pulumi.aws.cloudwatch.inputs.MetricAlarmMetricQueryArgs;
 import com.pulumi.aws.cloudwatch.inputs.MetricAlarmMetricQueryMetricArgs;
+import com.pulumi.aws.dynamodb.Table;
+import com.pulumi.aws.dynamodb.TableArgs;
+import com.pulumi.aws.dynamodb.inputs.TableAttributeArgs;
+import com.pulumi.aws.dynamodb.inputs.TableGlobalSecondaryIndexArgs;
 import com.pulumi.aws.ec2.Instance;
 import com.pulumi.aws.ec2.InstanceArgs;
 import com.pulumi.aws.ec2.InternetGateway;
@@ -66,6 +71,11 @@ import com.pulumi.aws.iam.RoleArgs;
 import com.pulumi.aws.iam.RolePolicyAttachment;
 import com.pulumi.aws.iam.RolePolicyAttachmentArgs;
 import com.pulumi.aws.inputs.GetAvailabilityZonesArgs;
+import com.pulumi.aws.lambda.Function;
+import com.pulumi.aws.lambda.FunctionArgs;
+import com.pulumi.aws.lambda.Permission;
+import com.pulumi.aws.lambda.PermissionArgs;
+import com.pulumi.aws.lambda.inputs.FunctionEnvironmentArgs;
 import com.pulumi.aws.lb.Listener;
 import com.pulumi.aws.lb.ListenerArgs;
 import com.pulumi.aws.lb.LoadBalancer;
@@ -84,9 +94,19 @@ import com.pulumi.aws.rds.SubnetGroupArgs;
 import com.pulumi.aws.route53.Record;
 import com.pulumi.aws.route53.RecordArgs;
 import com.pulumi.aws.route53.inputs.RecordAliasArgs;
+import com.pulumi.aws.sns.Topic;
+import com.pulumi.aws.sns.TopicArgs;
+import com.pulumi.aws.sns.TopicSubscription;
+import com.pulumi.aws.sns.TopicSubscriptionArgs;
 import com.pulumi.awsx.lb.ApplicationLoadBalancer;
 import com.pulumi.awsx.lb.ApplicationLoadBalancerArgs;
 import com.pulumi.core.Output;
+import com.pulumi.gcp.serviceaccount.Account;
+import com.pulumi.gcp.serviceaccount.AccountArgs;
+import com.pulumi.gcp.serviceaccount.Key;
+import com.pulumi.gcp.serviceaccount.KeyArgs;
+import com.pulumi.gcp.storage.BucketIAMMember;
+import com.pulumi.gcp.storage.BucketIAMMemberArgs;
 
 
 
@@ -104,7 +124,7 @@ public class App {
 		var config2 = ctx.config();
 
 		Yaml yaml = new Yaml();
-		String yamlFile = "Pulumi.demo.yaml";
+		String yamlFile = "Pulumi.pul-demo-dem.yaml";
 		try {
 			Map<String, Object> yamlData = yaml.load(new FileInputStream(yamlFile));
 
@@ -364,7 +384,7 @@ public class App {
                 .multiAz(false)
                 .build());
         
-     
+        String snsNameString = "my-assignment-sns-topic";
         
         Output<String> rdsEndpoint = rdsInstance.endpoint();
         rdsEndpoint.applyValue(endPointvalue -> {
@@ -374,6 +394,7 @@ public class App {
         		    "DB_USERNAME=" + dbUsername + "\n" +
         		    "DB_PASSWORD=" + dbPassword + "\n" +
         		    "DB_NAME=" + dbNameStr + "\n" +
+        		    "SNS_NAME=" + snsNameString + "\n" +
         		    "PORT=3000\n" +
         		    "sudo apt update -y\n" +
         		    "{\n" +
@@ -382,6 +403,7 @@ public class App {
         		    "  echo \"AWS_RDS_DB_MASTER_USERNAME=$DB_USERNAME\"\n" +
         		    "  echo \"AWS_RDS_DB_MASTER_PASSWORD=$DB_PASSWORD\"\n" +
         		    "  echo \"AWS_RDS_DB_NAME=$DB_NAME\"\n" +
+        		    "  echo \"AWS_SNS_TOPIC_NAME=$SNS_NAME\"\n" +
         		    "  echo \"PORT=$PORT\"\n" +
         		    "} >> /opt/webapps/application.properties\n"+
         		    "chmod 755 /opt/webapps/application.properties\n" +
@@ -391,7 +413,15 @@ public class App {
         	
         	// Create an IAM role
         	Role cloudWatchAgentRole = new Role("CloudWatchAgentRole", RoleArgs.builder()
-        		    .assumeRolePolicy("{\"Version\":\"2012-10-17\",\"Statement\":[{\"Action\":\"sts:AssumeRole\",\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"ec2.amazonaws.com\"}}]}")
+        		    .assumeRolePolicy(
+        	                "{\"Version\":\"2012-10-17\"," +
+        	                        "\"Statement\":[{" +
+        	                        "\"Sid\":\"\"," +
+        	                        "\"Effect\":\"Allow\"," +
+        	                        "\"Principal\":{" +
+        	                        "\"Service\":[\"lambda.amazonaws.com\",\"ec2.amazonaws.com\"]}," +
+        	                        "\"Action\":\"sts:AssumeRole\"}]}"
+        	                    )
         		    .description("IAM role for CloudWatch Agent")
         		    .name("CloudWatchAgentRole")
         		    .tags(Map.of("Name", "CloudWatchAgentRole"))
@@ -403,11 +433,78 @@ public class App {
         		    .role(cloudWatchAgentRole.name())
         		    .build());
         	
+        	 // Attach the lambdaFullAccess to the IAM role
+        	new RolePolicyAttachment("lambdaFullAccess", RolePolicyAttachmentArgs.builder()
+        		    .policyArn("arn:aws:iam::aws:policy/AWSLambda_FullAccess")
+        		    .role(cloudWatchAgentRole.name())
+        		    .build());
+        	
+        	// Attach the AmazonSESFullAccess to the IAM role
+        	new RolePolicyAttachment("sesFullAccess", RolePolicyAttachmentArgs.builder()
+        	    .policyArn("arn:aws:iam::aws:policy/AmazonSESFullAccess")
+        	    .role(cloudWatchAgentRole.name())
+        	    .build());
+        	
+        	// Attach the AmazonDynamoDBFullAccess to the IAM role
+        	new RolePolicyAttachment("dynamoDbFullAccess", RolePolicyAttachmentArgs.builder()
+        	    .policyArn("arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess")
+        	    .role(cloudWatchAgentRole.name())
+        	    .build());
+        	
+        	// Attach the AmazonSNSFullAccess to the IAM role
+        	new RolePolicyAttachment("snsFullAccess", RolePolicyAttachmentArgs.builder()
+        	    .policyArn("arn:aws:iam::aws:policy/AmazonSNSFullAccess")
+        	    .role(cloudWatchAgentRole.name())
+        	    .build());
+        	
+        	
+
+    		// Attach the AWSLambdaBasicExecutionRole to the IAM role
+        new RolePolicyAttachment("basicExecutionRole", RolePolicyAttachmentArgs.builder()
+            .policyArn("arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole")
+            .role(cloudWatchAgentRole.name())
+            .build());
+        	
         	// Create an IAM instance profile
         	InstanceProfile cloudWatchAgentProfile = new InstanceProfile("CloudWatchAgentProfile", InstanceProfileArgs.builder()
         	    .name("CloudWatchAgentProfile")
         	    .role(cloudWatchAgentRole.name())
         	    .build());
+        	
+            
+		        // Create SNS topic
+			    //Topic snsTopic = new Topic("my-assignment-sns-topic");
+			    
+			    Topic snsTopic = new Topic("my-assignment-sns-topic", TopicArgs.builder()   
+			    		.name("my-assignment-sns-topic")
+			            .build());
+
+			  //Create Service Account 
+				Account serviceAccount  = createServiceAccountGCP();
+				Key serviceAccountKey = createServiceAccountKey(serviceAccount);
+				serviceAccount.email().applyValue( serviceAccountEmailstr ->{
+					addStorageObjectUserRoleBinding(serviceAccount, serviceAccountEmailstr);
+					return null; 
+				});
+				
+			
+
+
+				
+				serviceAccountKey.privateKey().applyValue(serviceAccountKeyString -> {
+					
+					 //Role lambdaRole= createRoleForLambda();
+					 String serviceAccountKeyStr = new String(Base64.getDecoder().decode(serviceAccountKeyString));
+    				    
+    				  Function lambdaFunction =   createLambdaFunction(cloudWatchAgentRole, snsTopic, serviceAccountKeyStr  , "csye6225-demo2");
+    				  
+    				  TopicSubscription snsLambda =  buildSnsTopicSubscription(snsTopic, lambdaFunction);
+    				  
+    				  Table dynamoDb = createDynamoDb();
+					
+					 return null; 
+					
+				}); 
 
      
 
@@ -562,6 +659,9 @@ public class App {
 	     		            String subdomainDemo = "demo"; 
 
 	     		            createRoute53AliasRecord(loadBalancer, domainName, zoneId);
+	     		            
+	     		            
+	     		     
 
 	     					//createRoute53DemoRecord(ec2IpAddress,demoHostedNameStr, demoZoneIDStr);
 	    		        	 return null; 
@@ -682,6 +782,163 @@ public class App {
 		return instanceTemplate;
 		
 	}
+	
+	private static Account createServiceAccountGCP() {
+		Account serviceAccount = new Account("serviceAccount", AccountArgs.builder()        
+	            .accountId("csyedemo2")
+	            .displayName("csye demo2")
+	            .build());
+		return serviceAccount ;
+
+	}
+	private static Key createServiceAccountKey(Account serviceAccount) {
+		Key mykey = new Key("mykey", KeyArgs.builder()        
+	            .serviceAccountId(serviceAccount.name())
+	           // .publicKeyType("TYPE_GOOGLE_CREDENTIALS_FILE")
+	            .build());
+		return mykey;
+
+	}
+	private static void addStorageObjectUserRoleBinding(Account serviceAccount, String serviceAccountEmailstr) {
+	       
+		BucketIAMMember bucketIAMBinding = new BucketIAMMember("bucketIAM", BucketIAMMemberArgs.builder()
+	            .bucket("csye6225-demo2")
+	            .role("roles/storage.objectAdmin")
+	            .member("serviceAccount:" + serviceAccountEmailstr)
+	            .build());
+
+    }
+	
+	private static Table createDynamoDb() {
+		
+		final List<String> nonKeyAttributes = Arrays.asList("assignmentName", "emailStatus");
+		
+		Table basic_dynamodb_table = new Table("assignment-email-table", TableArgs.builder()    
+				.name("assignment-email-table")
+	            .attributes(  
+	            		
+	            	TableAttributeArgs.builder()
+		                    .name("id")
+		                    .type("S")
+		                    .build(),
+	                TableAttributeArgs.builder()
+	                    .name("username")
+	                    .type("S")
+	                    .build(),
+	                TableAttributeArgs.builder()
+	                    .name("assignmentName")
+	                    .type("S")
+	                    .build(),
+	                TableAttributeArgs.builder()
+	                    .name("emailStatus")
+	                    .type("S")
+	                    .build())
+	            
+		   .hashKey("id")
+          .rangeKey("username")
+          .billingMode("PROVISIONED")
+          .globalSecondaryIndexes(TableGlobalSecondaryIndexArgs.builder()
+        		  .hashKey("assignmentName")
+                  .rangeKey("emailStatus")
+                  .nonKeyAttributes(nonKeyAttributes)
+                  .writeCapacity(1)
+                  .readCapacity(1)
+                  .name("GlobalIndex")
+                  .projectionType("INCLUDE")
+                  .build()
+        		  )
+          .readCapacity(1)               
+          .writeCapacity(1)              
+          .build());
+		
+		return basic_dynamodb_table;
+
+	}
+	
+	public static TopicSubscription buildSnsTopicSubscription(Topic snsTopic, Function lambdaFunction) {
+		
+        // SNS Topic Subscription
+        TopicSubscription subscription = new TopicSubscription("my-sns-subscription", 
+                new TopicSubscriptionArgs
+                .Builder()
+                .topic(snsTopic.arn())
+                .protocol("lambda")
+                .endpoint(lambdaFunction.arn())
+                .build());
+        
+        return subscription;	
+	}
+	
+	
+	public static Role createRoleForLambda() {
+		
+		Role lambdaRole = new Role("lambdaRole", RoleArgs.builder()
+	            .assumeRolePolicy(
+	                "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Action\":\"sts:AssumeRole\",\"Principal\":{\"Service\":\"lambda.amazonaws.com\"},\"Effect\":\"Allow\",\"Sid\":\"\"}]}"
+	            )
+	            .description("IAM role for Lambda Fun")
+    		    .name("LambdaFunctionRole")
+    		    .tags(Map.of("Name", "LambdaFunctionRole"))
+	            .build());
+		
+		 // Attach the lambdaFullAccess to the IAM role
+    	new RolePolicyAttachment("lambdaFullAccess", RolePolicyAttachmentArgs.builder()
+    		    .policyArn("arn:aws:iam::aws:policy/AWSLambda_FullAccess")
+    		    .role(lambdaRole.name())
+    		    .build());
+    	
+    	// Attach the AmazonSESFullAccess to the IAM role
+    	new RolePolicyAttachment("sesFullAccess", RolePolicyAttachmentArgs.builder()
+    	    .policyArn("arn:aws:iam::aws:policy/AmazonSESFullAccess")
+    	    .role(lambdaRole.name())
+    	    .build());
+    	
+    	// Attach the AmazonDynamoDBFullAccess to the IAM role
+    	new RolePolicyAttachment("dynamoDbFullAccess", RolePolicyAttachmentArgs.builder()
+    	    .policyArn("arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess")
+    	    .role(lambdaRole.name())
+    	    .build());
+    	
+    	
+
+		// Attach the AWSLambdaBasicExecutionRole to the IAM role
+    new RolePolicyAttachment("basicExecutionRole", RolePolicyAttachmentArgs.builder()
+        .policyArn("arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole")
+        .role(lambdaRole.name())
+        .build());
+    	
+    	return lambdaRole;
+	}
+	public static Function createLambdaFunction(Role lambdaRole, Topic snsTopic, String serviceAccountKey, String bucketName) {
+	
+	    
+		Function testLambda = new Function("testLambda", FunctionArgs.builder()   
+	        		 .code(new FileArchive("lambda-app-example-0.0.1-SNAPSHOT.jar"))
+	                 .role(lambdaRole.arn())
+	                 .handler("example.LambdaApplication::handleRequest")
+	                 .runtime("java11")
+	                 .timeout(300)
+	                 .memorySize(512)
+	                
+	                 .environment(FunctionEnvironmentArgs.builder()
+	                	        .variables(Map.of(
+	                	            "GOOGLE_APPLICATION_CREDENTIALS", serviceAccountKey,
+	                	            "BUCKET_NAME", bucketName
+	                	        ))
+	                	        .build())
+	                 .build());
+		
+		// Add permission to allow SNS to invoke the Lambda function
+	    new Permission("snsInvokeLambda", PermissionArgs.builder()
+	        .action("lambda:InvokeFunction")
+	        .function(testLambda.name())
+	        .principal("sns.amazonaws.com")
+	        .sourceArn(snsTopic.arn())
+	        .build());
+	    
+		return testLambda;
+
+	}
 	private static Group createAutoScalingGroup(LaunchTemplate instanceTemplate, String[] zoneArray, List<String> publicSubnetIds, TargetGroup targetGroup) {
 		 List<String> zoneList = new ArrayList<>(Arrays.asList(zoneArray));
 
@@ -726,4 +983,3 @@ public class App {
 	
 
 }
-
