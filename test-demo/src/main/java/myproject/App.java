@@ -255,7 +255,7 @@ public class App {
     			    .toPort(22)
     			    .protocol("tcp")
     			   .cidrBlocks("0.0.0.0/0")
-    			   // .securityGroups(lbSecurityGroup.id().applyValue(List::of))
+    			   .securityGroups(lbSecurityGroup.id().applyValue(List::of))
     			    .build());
 
 
@@ -623,7 +623,9 @@ public class App {
 	     		                    .alarmDescription("This metric for low cpu usage")
 	     		                    .alarmActions(scaleDownPolicy.arn().applyValue(List::of))
 	     		                    .build());
-	     					
+	     		            
+	     		            
+	     					String sslCertificateArn ="arn:aws:acm:us-west-2:286957373320:certificate/787fa010-c3ae-4990-8a24-c58733742fb5";
 	     					
 	     		            // Create a new Application Load Balancer
 	     		            LoadBalancer loadBalancer = new LoadBalancer("MyappLoadBalancer", LoadBalancerArgs.builder()
@@ -637,7 +639,7 @@ public class App {
 	     		                .build());
 	     		            
 	     		          
-	     		            
+	     		            /*
 	     		            Listener listener = new Listener("listener", ListenerArgs.builder()
 	     		                    .loadBalancerArn(loadBalancer.arn())
 	     		                    .port(80)
@@ -647,6 +649,20 @@ public class App {
 	     		                            .targetGroupArn(targetGroup.arn())
 	     		                            .build())
 	     		                    .build());
+	     		                    */
+	     		            
+	     		           // Create a new HTTPS listener for the load balancer that uses the existing certificate.
+	     		           Listener httpsListener = new Listener("httpsListener", new ListenerArgs.Builder()
+	     		               .loadBalancerArn(loadBalancer.arn())
+	     		               .port(443)
+	     		               .protocol("HTTPS")
+	     		               .sslPolicy("ELBSecurityPolicy-2016-08")
+	     		               .certificateArn(sslCertificateArn)
+	     		               .defaultActions(new ListenerDefaultActionArgs.Builder()
+	     		                   .type("forward")
+	     		                   .targetGroupArn(targetGroup.arn())
+	     		                   .build())
+	     		               .build());
 	     		            
 	     					
 	     					//Output<String> ec2IpAddress = ec2Instance.publicIp();
@@ -945,7 +961,7 @@ public class App {
 		 Group autoScalingGroup = new Group("MyautoScalingGroup", new GroupArgs
 	                .Builder()
 	                .defaultCooldown(120)
-	               
+	                .name("MyautoScalingGroup")
 	                .launchTemplate(GroupLaunchTemplateArgs.builder()
 	                        .id(instanceTemplate.id())
 	                        .version("$Latest")
@@ -981,5 +997,3 @@ public class App {
 	}
 	
 	
-
-}
